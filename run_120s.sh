@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  LongLive one-click inference script: download LongLive weights + 120s video
+#  LongLive one-click inference script: download weights + generate 120s video
 # =============================================================================
 #  用法 / Usage:
 #     bash run_120s.sh
 #
 #  说明 / Notes:
-#   * 通过 https://hf-mirror.com 镜像下载 LongLive-1.3B 权重
+#   * 通过 https://hf-mirror.com 镜像下载 Wan2.1-T2V-1.3B 与 LongLive-1.3B 权重
+#     - Wan2.1-T2V-1.3B 提供 T5 文本编码器 / VAE / tokenizer / 架构 config
+#     - LongLive-1.3B 提供微调后的 generator 权重和 LoRA
 #   * 生成一个约 120 秒的长视频（16fps * 120s = 1920 帧 ≈ 480 latent frames）
 #   * 结果保存在 videos/long_120s/ 目录下
-#
-#  注意: 本脚本只下载推理微调权重 (LongLive-1.3B)。
-#        代码中 utils/wan_wrapper.py 仍然会从 wan_models/Wan2.1-T2V-1.3B/
-#        读取 T5 文本编码器 / VAE / tokenizer / 架构 config，
-#        请自行确保以下文件存在 (若没有请自行准备):
-#           wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth
-#           wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth
-#           wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl/
-#           wan_models/Wan2.1-T2V-1.3B/config.json  (以及配套 safetensors)
 # =============================================================================
 
 set -euo pipefail
@@ -38,7 +31,23 @@ if ! command -v huggingface-cli >/dev/null 2>&1; then
     pip install -U "huggingface_hub[cli]" hf_transfer
 fi
 
-# ---------- 4. 下载 LongLive-1.3B 权重 + 提示词 ----------
+# ---------- 4. 下载 Wan2.1-T2V-1.3B 基座 (T5 / VAE / tokenizer / config) ----------
+WAN_DIR="wan_models/Wan2.1-T2V-1.3B"
+if [ ! -f "${WAN_DIR}/Wan2.1_VAE.pth" ] || \
+   [ ! -f "${WAN_DIR}/models_t5_umt5-xxl-enc-bf16.pth" ] || \
+   [ ! -f "${WAN_DIR}/config.json" ]; then
+    echo "[INFO] 下载 Wan-AI/Wan2.1-T2V-1.3B 到 ${WAN_DIR} ..."
+    mkdir -p "${WAN_DIR}"
+    huggingface-cli download \
+        Wan-AI/Wan2.1-T2V-1.3B \
+        --local-dir "${WAN_DIR}" \
+        --local-dir-use-symlinks False \
+        --resume-download
+else
+    echo "[INFO] Wan2.1-T2V-1.3B 已存在，跳过下载"
+fi
+
+# ---------- 5. 下载 LongLive-1.3B 权重 + 提示词 ----------
 LONGLIVE_DIR="longlive_models"
 if [ ! -f "${LONGLIVE_DIR}/models/longlive_base.pt" ] || \
    [ ! -f "${LONGLIVE_DIR}/models/lora.pt" ] || \
@@ -52,26 +61,6 @@ if [ ! -f "${LONGLIVE_DIR}/models/longlive_base.pt" ] || \
         --resume-download
 else
     echo "[INFO] LongLive-1.3B 已存在，跳过下载"
-fi
-
-# ---------- 5. 前置检查: Wan 基座必要文件 ----------
-WAN_DIR="wan_models/Wan2.1-T2V-1.3B"
-MISSING=0
-for f in \
-    "${WAN_DIR}/models_t5_umt5-xxl-enc-bf16.pth" \
-    "${WAN_DIR}/Wan2.1_VAE.pth" \
-    "${WAN_DIR}/google/umt5-xxl" \
-    "${WAN_DIR}/config.json"
-do
-    if [ ! -e "$f" ]; then
-        echo "[ERROR] 缺少文件: $f"
-        MISSING=1
-    fi
-done
-if [ "$MISSING" -ne 0 ]; then
-    echo "[ERROR] 推理需要 Wan2.1-T2V-1.3B 的 T5 / VAE / tokenizer / config 文件,"
-    echo "        请先放置到 ${WAN_DIR}/ 后再运行本脚本."
-    exit 1
 fi
 
 # ---------- 6. 确认提示词文件存在 ----------
