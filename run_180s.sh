@@ -70,13 +70,13 @@ else
 fi
 
 # ---------- 6. 确认提示词文件存在 ----------
-PROMPT_FILE="${LONGLIVE_DIR}/prompts/vidprom_filtered_extended.txt"
+PROMPT_FILE="/home/zdmaogroup/wubin/reward-forcing-claude-add-experiment-runner-script-PPlnc/reward-forcing-claude-spatial-reward-forcing-L5245/LongLive-main/docs/MovieGenVideoBench.txt"
 if [ ! -f "${PROMPT_FILE}" ]; then
-    echo "[WARN] 未找到官方提示词文件 ${PROMPT_FILE}"
-    echo "[WARN] 将使用 example/long_example.txt 作为备用 data_path"
-    PROMPT_FILE="example/long_example.txt"
+    echo "[ERROR] 找不到提示词文件: ${PROMPT_FILE}"
+    exit 1
 fi
-echo "[INFO] 使用提示词文件: ${PROMPT_FILE}"
+NUM_LINES=$(wc -l < "${PROMPT_FILE}")
+echo "[INFO] 使用提示词文件: ${PROMPT_FILE} (共 ${NUM_LINES} 行, 只跑前 128 行)"
 
 # ---------- 7. 运行 180s 视频推理 ----------
 CONFIG_PATH="configs/longlive_inference_180s.yaml"

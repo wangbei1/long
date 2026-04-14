@@ -13,9 +13,9 @@ model_kwargs:
 
 
 # inference
-data_path: longlive_models/prompts/vidprom_filtered_extended.txt
+data_path: /home/zdmaogroup/wubin/reward-forcing-claude-add-experiment-runner-script-PPlnc/reward-forcing-claude-spatial-reward-forcing-L5245/LongLive-main/docs/MovieGenVideoBench.txt
 output_folder: videos/long_180s
-inference_iter: 0            # only generate the first prompt (one 180s video)
+inference_iter: 127          # run prompts 0..127 (first 128 lines of the file)
 num_output_frames: 720       # 720 latent frames ≈ 2880 pixel frames @16fps = 180s
 use_ema: false
 seed: 0
