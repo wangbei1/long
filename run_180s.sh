@@ -9,11 +9,14 @@
 #   * 通过 https://hf-mirror.com 镜像下载 Wan2.1-T2V-1.3B 与 LongLive-1.3B 权重
 #     - Wan2.1-T2V-1.3B 提供 T5 文本编码器 / VAE / tokenizer / 架构 config
 #     - LongLive-1.3B 提供微调后的 generator 权重和 LoRA
+#   * 只用短片训练得到的主干 longlive_base.pt, **不加载 LoRA**
 #   * 生成一个约 180 秒的长视频（16fps * 180s = 2880 帧 ≈ 720 latent frames）
 #   * 结果保存在 videos/long_180s/ 目录下
 #
-#  注意: 180s 长视频对显存要求更高, 如爆显存可在 yaml 中调小 num_output_frames
-#        (需保持能被 num_frame_per_block=3 整除).
+#  注意: 1) 主干本身只在短片 (~5s) 上训过, 直接推 720 latent frames 大概率会
+#           在后半段出现分布漂移/崩坏/重复, 这是预期行为, 不是 bug.
+#        2) 180s 长视频对显存要求更高, 如爆显存可在 yaml 中调小 num_output_frames
+#           (需保持能被 num_frame_per_block=3 整除).
 # =============================================================================
 
 set -euo pipefail
@@ -50,10 +53,9 @@ else
     echo "[INFO] Wan2.1-T2V-1.3B 已存在，跳过下载"
 fi
 
-# ---------- 5. 下载 LongLive-1.3B 权重 + 提示词 ----------
+# ---------- 5. 下载 LongLive-1.3B 主干 + 提示词 (不需要 lora.pt) ----------
 LONGLIVE_DIR="longlive_models"
 if [ ! -f "${LONGLIVE_DIR}/models/longlive_base.pt" ] || \
-   [ ! -f "${LONGLIVE_DIR}/models/lora.pt" ] || \
    [ ! -f "${LONGLIVE_DIR}/prompts/vidprom_filtered_extended.txt" ]; then
     echo "[INFO] 下载 Efficient-Large-Model/LongLive-1.3B 到 ${LONGLIVE_DIR} ..."
     mkdir -p "${LONGLIVE_DIR}"
@@ -61,9 +63,10 @@ if [ ! -f "${LONGLIVE_DIR}/models/longlive_base.pt" ] || \
         Efficient-Large-Model/LongLive-1.3B \
         --local-dir "${LONGLIVE_DIR}" \
         --local-dir-use-symlinks False \
-        --resume-download
+        --resume-download \
+        --include "models/longlive_base.pt" "prompts/*"
 else
-    echo "[INFO] LongLive-1.3B 已存在，跳过下载"
+    echo "[INFO] LongLive-1.3B 主干已存在，跳过下载"
 fi
 
 # ---------- 6. 确认提示词文件存在 ----------

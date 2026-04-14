@@ -24,13 +24,6 @@ save_with_index: true
 global_sink: true
 context_noise: 0
 
+# 只用短片训练得到的主干, 不加载 LoRA
 generator_ckpt: longlive_models/models/longlive_base.pt
-lora_ckpt: longlive_models/models/lora.pt
-
-adapter:
-  type: "lora"
-  rank: 256                    # LoRA rank (typical values: 8, 16, 32, 64)
-  alpha: 256                   # LoRA alpha (typically same as rank, but can be different)
-  dropout: 0.0                # LoRA dropout rate
-  dtype: "bfloat16"          # Data type for LoRA parameters: "bfloat16", "float16", "float32"
-  verbose: false              # Whether to print all target module names
+# lora_ckpt / adapter 均未设置 -> inference.py 不会给 generator 套 LoRA
