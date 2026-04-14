@@ -24,6 +24,14 @@ save_with_index: true
 global_sink: true
 context_noise: 0
 
-# 只用短片训练得到的主干, 不加载 LoRA
+# generator 主干 + 长视频 LoRA
 generator_ckpt: longlive_models/models/longlive_base.pt
-# lora_ckpt / adapter 均未设置 -> inference.py 不会给 generator 套 LoRA
+lora_ckpt: longlive_models/models/lora.pt
+
+adapter:
+  type: "lora"
+  rank: 256                    # 必须与训练 train_long 时保持一致
+  alpha: 256
+  dropout: 0.0
+  dtype: "bfloat16"
+  verbose: false
