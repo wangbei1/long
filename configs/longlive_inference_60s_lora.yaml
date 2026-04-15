@@ -1,0 +1,35 @@
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: true
+num_frame_per_block: 3
+model_name: Wan2.1-T2V-1.3B
+model_kwargs:
+  local_attn_size: 12
+  timestep_shift: 5.0
+  sink_size: 3
+
+# inference (base backbone + long-video LoRA)
+data_path: /home/zdmaogroup/wubin/reward-forcing-claude-add-experiment-runner-script-PPlnc/reward-forcing-claude-spatial-reward-forcing-L5245/LongLive-main/docs/MovieGenVideoBench.txt
+output_folder: videos/gen_60s_lora
+inference_iter: 127
+num_output_frames: 252       # 252 latent frames ≈ 60s
+use_ema: false
+seed: 0
+num_samples: 1
+save_with_index: true
+global_sink: true
+context_noise: 0
+
+generator_ckpt: longlive_models/models/longlive_base.pt
+lora_ckpt: longlive_models/models/lora.pt
+
+adapter:
+  type: "lora"
+  rank: 256
+  alpha: 256
+  dropout: 0.0
+  dtype: "bfloat16"
+  verbose: false
