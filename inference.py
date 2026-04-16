@@ -3,6 +3,7 @@
 import argparse
 import torch
 import os
+from concurrent.futures import ThreadPoolExecutor
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from torchvision import transforms
@@ -170,6 +171,18 @@ def encode(self, videos: torch.Tensor) -> torch.Tensor:
     return output
 
 
+# Determine model type once (for resume check + save)
+if hasattr(pipeline, 'is_lora_enabled') and pipeline.is_lora_enabled:
+    _model_type = "lora"
+elif getattr(config, 'use_ema', False):
+    _model_type = "ema"
+else:
+    _model_type = "regular"
+
+# Async video saving: write_video in background threads so inference doesn't block on IO
+_save_pool = ThreadPoolExecutor(max_workers=2)
+_save_futures = []
+
 for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
     idx = batch_data['idx'].item()
 
@@ -179,6 +192,22 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         batch = batch_data
     elif isinstance(batch_data, list):
         batch = batch_data[0]  # First (and only) item in the batch
+
+    # --- Resume: skip if all output files already exist ---
+    _all_exist = True
+    for _si in range(config.num_samples):
+        if config.save_with_index:
+            _chk = os.path.join(config.output_folder, f'rank{rank}-{idx}-{_si}_{_model_type}.mp4')
+        else:
+            _chk = os.path.join(config.output_folder, f'rank{rank}-{batch["prompts"][0][:100]}-{_si}.mp4')
+        if not os.path.exists(_chk):
+            _all_exist = False
+            break
+    if _all_exist:
+        print(f"[Resume] Skipping idx={idx}, output already exists")
+        if config.inference_iter != -1 and i >= config.inference_iter:
+            break
+        continue
 
     all_video = []
     num_generated_frames = 0  # Number of generated (latent) frames
@@ -221,30 +250,24 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
     # Clear VAE cache
     pipeline.vae.model.clear_cache()
 
-    if dist.is_initialized():
-        rank = dist.get_rank()
-    else:
-        rank = 0
-
-    # Save the video if the current prompt is not a dummy prompt
+    # Save the video if the current prompt is not a dummy prompt (async)
     if idx < num_prompts:
-        # Determine model type for filename
-        if hasattr(pipeline, 'is_lora_enabled') and pipeline.is_lora_enabled:
-            model_type = "lora"
-        elif getattr(config, 'use_ema', False):
-            model_type = "ema"
-        else:
-            model_type = "regular"
-            
         for seed_idx in range(config.num_samples):
-            # All processes save their videos
             if config.save_with_index:
-                output_path = os.path.join(config.output_folder, f'rank{rank}-{idx}-{seed_idx}_{model_type}.mp4')
+                output_path = os.path.join(config.output_folder, f'rank{rank}-{idx}-{seed_idx}_{_model_type}.mp4')
             else:
                 output_path = os.path.join(config.output_folder, f'rank{rank}-{prompt[:100]}-{seed_idx}.mp4')
-            write_video(output_path, video[seed_idx], fps=16)
+            _save_futures.append(
+                _save_pool.submit(write_video, output_path, video[seed_idx], fps=16)
+            )
 
     if config.inference_iter != -1 and i >= config.inference_iter:
         break
+
+# Wait for all async saves to finish
+for _f in _save_futures:
+    _f.result()
+_save_pool.shutdown(wait=True)
+
 if dist.is_initialized():
     dist.destroy_process_group()

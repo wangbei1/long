@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  LongLive 一键推理分发脚本 (inline params, 临时生成 yaml)
+#  LongLive 一键推理分发脚本
 # =============================================================================
 #  用法 / Usage:
-#     bash run_gen.sh <seconds> <mode>
+#     bash run_gen.sh <seconds> <mode> [ngpus]
 #
 #  参数:
 #     seconds : 10 | 30 | 60 | 120       (视频时长, 秒)
 #     mode    : base | lora               (base = 纯主干, lora = 主干+LoRA)
+#     ngpus   : 1-8 (默认 1)              单卡 or 多卡
 #
 #  示例:
-#     bash run_gen.sh  10 base
-#     bash run_gen.sh  30 lora
-#     bash run_gen.sh  60 base
-#     bash run_gen.sh 120 lora
+#     bash run_gen.sh  10 base            # 10s, 纯主干, 单卡
+#     bash run_gen.sh  30 lora 8          # 30s, 带 LoRA, 八卡
+#     bash run_gen.sh 120 base 4          # 120s, 纯主干, 四卡
 #
 #  说明:
-#     * 本脚本不使用任何 configs/ 下的预设 yaml, 所有参数都在这里定义,
-#       运行时用 mktemp 临时生成一份 yaml 传给 inference.py, 结束后自动删除.
-#     * prompt 取自 docs/MovieGenVideoBench.txt 前 128 条 (inference_iter=127)
-#     * 输出目录: videos/gen_<seconds>s_<mode>/
-#     * latent frames 按 10s=42 线性缩放:
-#         10s -> 42,  30s -> 126,  60s -> 252,  120s -> 504
+#     * 所有参数内联, 运行时 mktemp 生成临时 yaml, 结束后自动清理
+#     * prompt 取自 MovieGenVideoBench.txt 前 128 条
+#     * 多卡时每个 rank 的 CUDA_VISIBLE_DEVICES 被隔离到对应物理卡,
+#       避免在 GPU 0 上泄漏 ~400MB CUDA context
+#     * 支持断点重续: 输出目录下已存在的视频会被自动跳过, 不重复推理
 # =============================================================================
 
 set -euo pipefail
 
 # ---------- 参数校验 ----------
-if [ $# -ne 2 ]; then
-    echo "Usage: bash $0 <10|30|60|120> <base|lora>"
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+    echo "Usage: bash $0 <10|30|60|120> <base|lora> [ngpus]"
     exit 1
 fi
 SEC="$1"
 MODE="$2"
+NGPUS="${3:-1}"
 
 case "${SEC}" in
     10)  NUM_FRAMES=42  ;;
@@ -45,6 +45,9 @@ case "${MODE}" in
     base|lora) ;;
     *) echo "[ERROR] mode must be one of: base lora (got '${MODE}')"; exit 1 ;;
 esac
+if ! [[ "${NGPUS}" =~ ^[1-8]$ ]]; then
+    echo "[ERROR] ngpus must be 1-8 (got '${NGPUS}')"; exit 1
+fi
 
 # ---------- 进入脚本所在目录 ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,7 +93,6 @@ mkdir -p "${OUT_DIR}"
 
 # ---------- 临时生成 yaml ----------
 TMP_YAML="$(mktemp -t longlive_${SEC}s_${MODE}_XXXXXX.yaml)"
-trap 'rm -f "${TMP_YAML}"' EXIT
 
 cat > "${TMP_YAML}" <<EOF
 denoising_step_list:
@@ -140,13 +142,37 @@ cat "${TMP_YAML}"
 echo "------------------"
 echo "[INFO] mode   : ${MODE}"
 echo "[INFO] length : ${SEC}s  (num_output_frames=${NUM_FRAMES})"
+echo "[INFO] gpus   : ${NGPUS}"
 echo "[INFO] output : ${OUT_DIR}"
+echo "[INFO] resume : existing videos will be skipped"
 
 # ---------- 启动推理 ----------
-torchrun \
-    --nproc_per_node=1 \
-    --master_port=29500 \
-    inference.py \
-    --config_path "${TMP_YAML}"
+if [ "${NGPUS}" -eq 1 ]; then
+    # 单卡: 直接启动
+    trap 'rm -f "${TMP_YAML}"' EXIT
+    torchrun \
+        --nproc_per_node=1 \
+        --master_port=29500 \
+        inference.py \
+        --config_path "${TMP_YAML}"
+else
+    # 多卡: 用 launcher 隔离每个 rank 的 CUDA_VISIBLE_DEVICES,
+    # 避免所有 rank 在 GPU 0 上泄漏 CUDA context
+    TMP_LAUNCHER="$(mktemp -t longlive_launcher_XXXXXX.sh)"
+    trap 'rm -f "${TMP_YAML}" "${TMP_LAUNCHER}"' EXIT
+    cat > "${TMP_LAUNCHER}" <<'LAUNCH_EOF'
+#!/bin/bash
+export CUDA_VISIBLE_DEVICES=${LOCAL_RANK}
+export LOCAL_RANK=0
+exec python -u inference.py "$@"
+LAUNCH_EOF
+    chmod +x "${TMP_LAUNCHER}"
 
-echo "[DONE] ${SEC}s (${MODE}) 推理完成, 输出: ${OUT_DIR}/"
+    torchrun \
+        --nproc_per_node="${NGPUS}" \
+        --master_port=29500 \
+        --no-python \
+        "${TMP_LAUNCHER}" --config_path "${TMP_YAML}"
+fi
+
+echo "[DONE] ${SEC}s (${MODE}, ${NGPUS}GPU) 推理完成, 输出: ${OUT_DIR}/"
